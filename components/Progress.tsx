@@ -16,32 +16,52 @@ import { useCatalog } from "@/lib/catalog";
 import { useEntries } from "@/lib/db";
 import {
   METRIC_LABEL,
+  change,
+  entryValues,
+  fmtEntry,
   fmtMetric,
+  fmtPart,
   fmtSets,
   hasResult,
   lowerIsBetter,
-  metricValue,
+  partMeasured,
+  partValues,
   workoutTitle,
   type Metric,
+  type Values,
 } from "@/lib/measures";
+import { normName } from "@/lib/parts";
 import type { Entry } from "@/lib/types";
 import { fmtDate, fmtDateShort, mondayIso, parseIso } from "@/lib/util";
 import { Chips, Empty } from "./ui";
 
-type Tab = "workout" | "movimenti" | "periodo";
-const METRICS: Metric[] = ["time", "weight", "rounds", "volume"];
+type Tab = "wod" | "esercizio" | "periodo";
 const AXIS = { fill: "#8a9b93", fontSize: 12 };
 const GREEN = "#10b981";
+const RED = "#ef4444";
+
+/** Un punto del grafico: una volta in cui hai fatto il WOD (o l'esercizio). */
+interface Point {
+  e: Entry;
+  v: Values;
+  text: string;
+}
+
+const wodPoint = (e: Entry): Point => ({
+  e,
+  v: entryValues(e),
+  text: fmtEntry(e),
+});
 
 export default function Progress() {
-  const [tab, setTab] = useState<Tab>("workout");
+  const [tab, setTab] = useState<Tab>("wod");
   return (
     <section className="space-y-3 p-4">
       <h1 className="text-lg font-bold">Progressi</h1>
       <Chips
         options={[
-          { value: "workout", label: "Per workout" },
-          { value: "movimenti", label: "Per movimento" },
+          { value: "wod", label: "Per WOD" },
+          { value: "esercizio", label: "Per esercizio" },
           { value: "periodo", label: "Per periodo" },
         ]}
         value={tab}
@@ -52,31 +72,56 @@ export default function Progress() {
   );
 }
 
-/* ------------------------- per workout / movimento ------------------------- */
+/* ----------------------------- elenco e dettaglio ----------------------------- */
 
-function Groups({ mode }: { mode: "workout" | "movimenti" }) {
+interface Group {
+  key: string;
+  title: string;
+  points: Point[];
+  entries: Entry[];
+}
+
+function Groups({ mode }: { mode: "wod" | "esercizio" }) {
   const entries = useEntries();
   const { byId } = useCatalog();
   const [sel, setSel] = useState<string | null>(null);
 
-  const groups = useMemo(() => {
-    const m = new Map<string, Entry[]>();
-    for (const e of entries ?? []) {
-      if (!hasResult(e)) continue;
+  const groups = useMemo<Group[]>(() => {
+    const m = new Map<string, Group>();
+    const push = (key: string, title: string, e: Entry, p: Point) => {
+      const g = m.get(key) ?? { key, title, points: [], entries: [] };
+      g.points.push(p);
+      g.entries.push(e);
+      g.title = title;
+      m.set(key, g);
+    };
+    const sorted = (entries ?? [])
+      .filter(hasResult)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    for (const e of sorted) {
       const w = byId.get(e.wid);
-      const keys = mode === "workout" ? [e.wid] : (w?.tags.movements ?? []);
-      for (const k of keys) m.set(k, [...(m.get(k) ?? []), e]);
+      if (mode === "wod") {
+        push(e.wid, workoutTitle(w), e, wodPoint(e));
+        continue;
+      }
+      const measured = (e.parts ?? []).filter((p) => partMeasured(p, e));
+      if (measured.length) {
+        for (const p of measured)
+          push(normName(p.name), p.name, e, {
+            e,
+            v: partValues(p),
+            text: fmtPart(p),
+          });
+      } else {
+        // workout senza esercizi: ripiego sui movimenti del catalogo
+        const v = entryValues(e);
+        for (const mv of w?.tags.movements ?? [])
+          push(`t:${mv}`, mv, e, { e, v, text: fmtEntry(e) });
+      }
     }
-    return [...m.entries()]
-      .map(([key, list]) => ({
-        key,
-        title: mode === "workout" ? workoutTitle(byId.get(key)) : key,
-        list: list.sort((a, b) => a.date.localeCompare(b.date)),
-      }))
-      .sort(
-        (a, b) =>
-          b.list.length - a.list.length || a.title.localeCompare(b.title),
-      );
+    return [...m.values()].sort(
+      (a, b) => b.points.length - a.points.length || a.title.localeCompare(b.title),
+    );
   }, [entries, byId, mode]);
 
   if (entries === undefined) return null;
@@ -95,11 +140,16 @@ function Groups({ mode }: { mode: "workout" | "movimenti" }) {
         <button className="btn btn-sm" onClick={() => setSel(null)}>
           ‹ Tutti
         </button>
-        <Series
-          title={current.title}
-          list={current.list}
-          showWorkout={mode === "movimenti"}
-        />
+        {mode === "wod" ? (
+          <WodDetail title={current.title} entries={current.entries} />
+        ) : (
+          <Series
+            title={current.title}
+            points={current.points}
+            order={["weight", "reps", "volume", "time", "rounds"]}
+            showWorkout
+          />
+        )}
       </div>
     );
 
@@ -110,8 +160,8 @@ function Groups({ mode }: { mode: "workout" | "movimenti" }) {
           <button className="card w-full p-3 text-left" onClick={() => setSel(g.key)}>
             <h3 className="font-bold">{g.title}</h3>
             <p className="muted text-sm">
-              {g.list.length} {g.list.length === 1 ? "volta" : "volte"} · ultima{" "}
-              {fmtDate(g.list[g.list.length - 1].date)}
+              {g.points.length} {g.points.length === 1 ? "volta" : "volte"} · ultima{" "}
+              {fmtDate(g.points[g.points.length - 1].e.date)}
             </p>
           </button>
         </li>
@@ -120,45 +170,239 @@ function Groups({ mode }: { mode: "workout" | "movimenti" }) {
   );
 }
 
-function Series({
-  title,
-  list,
-  showWorkout,
-}: {
-  title: string;
-  list: Entry[];
-  showWorkout: boolean;
-}) {
-  const { byId } = useCatalog();
-  const available = METRICS.filter((m) =>
-    list.some((e) => metricValue(e, m) !== undefined),
-  );
-  const [pick, setPick] = useState<Metric | null>(null);
-  const metric = pick && available.includes(pick) ? pick : available[0];
+/** Dettaglio di un WOD: andamento complessivo, per esercizio e confronto tra le volte. */
+function WodDetail({ title, entries }: { title: string; entries: Entry[] }) {
+  const [scope, setScope] = useState("all");
 
-  if (!metric) return <Empty>Nessun valore misurabile.</Empty>;
+  const exercises = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of entries)
+      for (const p of e.parts ?? [])
+        if (partMeasured(p, e) && !m.has(normName(p.name)))
+          m.set(normName(p.name), p.name);
+    return [...m.entries()];
+  }, [entries]);
 
-  const points = list
-    .map((e) => ({ e, v: metricValue(e, metric) }))
-    .filter((p): p is { e: Entry; v: number } => p.v !== undefined);
-  const best = points.reduce<number | undefined>(
-    (b, p) =>
-      b === undefined || (lowerIsBetter(metric) ? p.v < b : p.v > b) ? p.v : b,
-    undefined,
-  );
-  const last = points[points.length - 1];
-  const prev = points[points.length - 2];
-  const delta = last && prev ? last.v - prev.v : undefined;
-  const improved =
-    delta === undefined || delta === 0
-      ? undefined
-      : lowerIsBetter(metric)
-        ? delta < 0
-        : delta > 0;
+  const points: Point[] =
+    scope === "all"
+      ? entries.map(wodPoint)
+      : entries.flatMap((e) => {
+          const p = (e.parts ?? []).find(
+            (x) => normName(x.name) === scope && partMeasured(x, e),
+          );
+          return p ? [{ e, v: partValues(p), text: fmtPart(p) }] : [];
+        });
 
   return (
     <div className="space-y-3">
+      {exercises.length > 0 && (
+        <div>
+          <p className="label mb-1">Vedi</p>
+          <Chips
+            options={[
+              { value: "all", label: "Tutto il WOD" },
+              ...exercises.map(([k, name]) => ({ value: k, label: name })),
+            ]}
+            value={scope}
+            onChange={setScope}
+          />
+        </div>
+      )}
+      <Series
+        title={scope === "all" ? title : (exercises.find(([k]) => k === scope)?.[1] ?? title)}
+        subtitle={scope === "all" ? undefined : title}
+        points={points}
+        order={
+          scope === "all"
+            ? ["time", "rounds", "volume", "weight"]
+            : ["weight", "reps", "volume"]
+        }
+      />
+      {scope === "all" && entries.length > 1 && <Compare entries={entries} />}
+    </div>
+  );
+}
+
+/* ------------------------- confronto tra le ripetizioni ------------------------- */
+
+function lastTwo(vals: (number | undefined)[]) {
+  const idx = vals.map((v, i) => (v !== undefined ? i : -1)).filter((i) => i >= 0);
+  if (idx.length < 2) return undefined;
+  return [vals[idx[idx.length - 2]]!, vals[idx[idx.length - 1]]!] as const;
+}
+
+function Delta({ prev, cur, metric }: { prev?: number; cur?: number; metric: Metric }) {
+  const c = change(prev, cur, metric);
+  if (!c) return <span className="muted">=</span>;
+  return (
+    <span className="font-semibold" style={{ color: c.better ? GREEN : RED }}>
+      {c.diff > 0 ? "▲ +" : "▼ −"}
+      {fmtMetric(metric, Math.abs(c.diff))}
+    </span>
+  );
+}
+
+/** Tabella: una colonna per ogni volta che hai fatto il WOD, una riga per esercizio. */
+function Compare({ entries }: { entries: Entry[] }) {
+  const runs = entries.slice(-6);
+
+  const rows = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const e of runs)
+      for (const p of e.parts ?? [])
+        if (partMeasured(p, e) && !names.has(normName(p.name)))
+          names.set(normName(p.name), p.name);
+    return [...names.entries()].map(([key, name]) => {
+      const parts = runs.map((e) =>
+        (e.parts ?? []).find((p) => normName(p.name) === key && partMeasured(p, e)),
+      );
+      // se ci sono pesi si confronta il peso, altrimenti le ripetizioni
+      const metric: Metric = parts.some((p) => p?.weight !== undefined)
+        ? "weight"
+        : "reps";
+      const two = lastTwo(parts.map((p) => (p ? partValues(p)[metric] : undefined)));
+      return { key, name, parts, metric, two };
+    });
+  }, [runs]);
+
+  const overall = runs.map(entryValues);
+  const mainMetric: Metric = overall.some((v) => v.time !== undefined)
+    ? "time"
+    : "rounds";
+  const mainTwo = lastTwo(overall.map((v) => v[mainMetric]));
+  const volTwo = lastTwo(overall.map((v) => v.volume));
+
+  const th = "px-2 py-1 text-right font-semibold whitespace-nowrap";
+  const td = "px-2 py-1.5 text-right whitespace-nowrap tabular-nums";
+  const first =
+    "sticky left-0 z-10 bg-[var(--card)] px-2 py-1.5 text-left font-semibold";
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-base font-bold">Confronto tra le volte</h3>
+      <div className="card scroll-x">
+        <table className="w-full min-w-max border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-[var(--line)]">
+              <th className={`${first} label`}> </th>
+              <th className={th}>Δ ultima</th>
+              {runs.map((e) => (
+                <th key={e.id} className={th}>
+                  {fmtDateShort(e.date)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b border-[var(--line)]">
+              <td className={first}>Risultato</td>
+              <td className={td}>
+                {mainTwo ? (
+                  <Delta prev={mainTwo[0]} cur={mainTwo[1]} metric={mainMetric} />
+                ) : (
+                  "—"
+                )}
+              </td>
+              {runs.map((e) => (
+                <td key={e.id} className={td}>
+                  {fmtSets(e.sets) || "—"}
+                </td>
+              ))}
+            </tr>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b border-[var(--line)]">
+                <td className={first}>{r.name}</td>
+                <td className={td}>
+                  {r.two ? (
+                    <Delta prev={r.two[0]} cur={r.two[1]} metric={r.metric} />
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                {r.parts.map((p, i) => (
+                  <td key={runs[i].id} className={td}>
+                    {p ? fmtPart(p) : "—"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {overall.some((v) => v.volume !== undefined) && (
+              <tr>
+                <td className={first}>Volume totale</td>
+                <td className={td}>
+                  {volTwo ? (
+                    <Delta prev={volTwo[0]} cur={volTwo[1]} metric="volume" />
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                {overall.map((v, i) => (
+                  <td key={runs[i].id} className={td}>
+                    {v.volume !== undefined ? fmtMetric("volume", v.volume) : "—"}
+                  </td>
+                ))}
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted text-xs">
+        Δ = ultima volta rispetto alla precedente: verde = migliorato, rosso = peggiorato. Scorri a destra per le altre date. Per gli esercizi con peso si
+        confronta il peso, altrimenti le ripetizioni. Il volume è la somma di
+        ripetizioni × kg. Sono mostrate le ultime 6 volte.
+      </p>
+    </div>
+  );
+}
+
+/* --------------------------------- grafico --------------------------------- */
+
+function Series({
+  title,
+  subtitle,
+  points,
+  order,
+  showWorkout,
+}: {
+  title: string;
+  subtitle?: string;
+  points: Point[];
+  order: Metric[];
+  showWorkout?: boolean;
+}) {
+  const { byId } = useCatalog();
+  const available = order.filter((m) => points.some((p) => p.v[m] !== undefined));
+  const [pick, setPick] = useState<Metric | null>(null);
+  const metric = pick && available.includes(pick) ? pick : available[0];
+
+  const head = (
+    <div>
       <h2 className="text-lg font-bold">{title}</h2>
+      {subtitle && <p className="muted text-sm">{subtitle}</p>}
+    </div>
+  );
+  if (!metric)
+    return (
+      <div className="space-y-3">
+        {head}
+        <Empty>Nessun valore misurabile ancora.</Empty>
+      </div>
+    );
+
+  const series = points
+    .map((p) => ({ p, v: p.v[metric] }))
+    .filter((x): x is { p: Point; v: number } => x.v !== undefined);
+  const best = series.reduce<number | undefined>(
+    (b, x) =>
+      b === undefined || (lowerIsBetter(metric) ? x.v < b : x.v > b) ? x.v : b,
+    undefined,
+  );
+  const last = series[series.length - 1];
+  const c = change(series[series.length - 2]?.v, last?.v, metric);
+
+  return (
+    <div className="space-y-3">
+      {head}
       {available.length > 1 && (
         <Chips
           options={available.map((m) => ({ value: m, label: METRIC_LABEL[m] }))}
@@ -179,12 +423,13 @@ function Series({
           <p className="text-2xl font-bold">
             {last ? fmtMetric(metric, last.v) : "—"}
           </p>
-          {improved !== undefined && delta !== undefined && (
+          {c && (
             <p
               className="text-sm font-semibold"
-              style={{ color: improved ? "#10b981" : "#ef4444" }}
+              style={{ color: c.better ? GREEN : RED }}
             >
-              {improved ? "▲" : "▼"} {fmtMetric(metric, Math.abs(delta))}
+              {c.diff > 0 ? "▲ +" : "▼ −"}
+              {fmtMetric(metric, Math.abs(c.diff))}
             </p>
           )}
         </div>
@@ -193,7 +438,7 @@ function Series({
       <div className="card p-2" style={{ height: 240 }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
-            data={points.map((p) => ({ date: p.e.date, v: p.v }))}
+            data={series.map((x) => ({ date: x.p.e.date, v: x.v }))}
             margin={{ top: 10, right: 12, bottom: 0, left: 0 }}
           >
             <CartesianGrid stroke="#8a9b9344" vertical={false} />
@@ -205,7 +450,7 @@ function Series({
             />
             <YAxis
               tick={AXIS}
-              width={metric === "time" ? 46 : 40}
+              width={metric === "time" ? 46 : 44}
               reversed={lowerIsBetter(metric)}
               domain={["auto", "auto"]}
               tickFormatter={(v: number) => fmtMetric(metric, v).replace(" kg", "")}
@@ -231,22 +476,27 @@ function Series({
       )}
 
       <ul className="space-y-2">
-        {[...list].reverse().map((e) => {
-          const v = metricValue(e, metric);
+        {[...points].reverse().map((p) => {
+          const v = p.v[metric];
           const isBest = v !== undefined && v === best;
+          const e = p.e;
           return (
-            <li key={e.id} className="card p-3">
+            <li key={`${e.id}-${p.text}`} className="card p-3">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="font-semibold">{fmtDate(e.date)}</span>
                 <span className="muted text-xs">
-                  {e.level === "rx" ? "Rx" : e.level === "intermediate" ? "Intermediate" : "Beginner"}
+                  {e.level === "rx"
+                    ? "Rx"
+                    : e.level === "intermediate"
+                      ? "Intermediate"
+                      : "Beginner"}
                   {isBest ? " · 🏆 record" : ""}
                 </span>
               </div>
               {showWorkout && (
                 <p className="text-sm">{workoutTitle(byId.get(e.wid))}</p>
               )}
-              <p className="text-sm">{fmtSets(e.sets)}</p>
+              <p className="text-sm">{p.text}</p>
               {e.note && <p className="muted text-sm">“{e.note}”</p>}
             </li>
           );
@@ -273,7 +523,7 @@ function Periods() {
       const r = m.get(key) ?? { days: new Set(), workouts: 0, volume: 0 };
       r.days.add(e.date);
       r.workouts += 1;
-      r.volume += metricValue(e, "volume") ?? 0;
+      r.volume += entryValues(e).volume ?? 0;
       m.set(key, r);
     }
     return [...m.entries()]
@@ -332,7 +582,9 @@ function Periods() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <p className="muted text-xs">Giorni allenati per {by === "week" ? "settimana (inizia il lunedì)" : "mese"}.</p>
+          <p className="muted text-xs">
+            Giorni allenati per {by === "week" ? "settimana (inizia il lunedì)" : "mese"}.
+          </p>
           <ul className="space-y-2">
             {[...rows].reverse().map((r) => (
               <li key={r.key} className="card flex items-baseline justify-between p-3">

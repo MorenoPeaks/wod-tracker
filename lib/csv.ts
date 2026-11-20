@@ -1,5 +1,5 @@
 import { fmtTime } from "./util";
-import { hasValue, workoutTitle } from "./measures";
+import { hasValue, partMeasured, workoutTitle } from "./measures";
 import type { Entry, Workout } from "./types";
 
 const esc = (v: unknown) => {
@@ -15,6 +15,7 @@ export function entriesToCsv(entries: Entry[], byId: Map<string, Workout>) {
     "formato",
     "livello",
     "fatto",
+    "esercizio",
     "serie",
     "round",
     "ripetizioni",
@@ -37,6 +38,7 @@ export function entriesToCsv(entries: Entry[], byId: Map<string, Workout>) {
           w?.tags.format,
           e.level,
           e.done ? "si" : "no",
+          "",
           i + 1,
           s.rounds,
           s.reps,
@@ -48,6 +50,12 @@ export function entriesToCsv(entries: Entry[], byId: Map<string, Workout>) {
           .join(","),
       ),
     );
+    for (const p of (e.parts ?? []).filter((x) => partMeasured(x, e)))
+      rows.push(
+        [e.date, workoutTitle(w), w?.tags.format, e.level, e.done ? "si" : "no", p.name, "", "", p.reps, p.weight, "", ""]
+          .map(esc)
+          .join(","),
+      );
   }
   return rows.join("\n");
 }

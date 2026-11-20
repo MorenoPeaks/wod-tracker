@@ -10,9 +10,9 @@ PWA per iPhone: pianifichi i workout CrossFit, registri i risultati (serie, ripe
 | **Settimana** | Lun–dom, duplica settimana, salva come modello |
 | **Libreria** | 1.838 workout (Girls, Hero, WOD 2021–2026) con ricerca e filtri, più i tuoi workout |
 | **Programmi** | Modelli di settimana riutilizzabili |
-| **Progressi** | Grafici per workout, per movimento e per periodo, con record personali |
+| **Progressi** | Per WOD (andamento complessivo + confronto tra le volte in cui lo ripeti), per esercizio, per periodo; record personali |
 
-Le misure proposte dipendono dal formato (For time → tempo, AMRAP → round + rip., Forza → serie con rip. e kg) e si cambiano per ogni workout. Impostazioni (tocca il badge in alto): sincronizza ora, esporta CSV, esci.
+Ogni workout ha gli **esercizi del WOD** (nome, ripetizioni, peso): al primo inserimento li ricava dal testo, le volte dopo riparte da quelli dell'ultima volta e mostra i pesi precedenti in grigio. Gli esercizi con lo stesso nome vengono confrontati nel tempo. Le misure del risultato complessivo dipendono dal formato (For time → tempo, AMRAP → round + rip., Forza → serie con rip. e kg) e si cambiano per ogni workout. Impostazioni (tocca il badge in alto): sincronizza ora, esporta CSV, esci.
 
 ## Architettura
 

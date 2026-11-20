@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { duplicateDay } from "@/lib/actions";
 import { useCatalog } from "@/lib/catalog";
 import { useEntries } from "@/lib/db";
-import { fmtSets, hasResult } from "@/lib/measures";
+import { fmtEntry, hasResult } from "@/lib/measures";
 import { addDaysIso, fmtDayLong, todayIso } from "@/lib/util";
 import EntryCard from "./EntryCard";
 import RestTimer from "./RestTimer";
@@ -31,11 +31,13 @@ export default function Today({
   );
 
   /** Ultimo risultato registrato per lo stesso workout, in un giorno precedente. */
-  const previousOf = (wid: string) => {
-    const prev = (entries ?? [])
+  const lastRun = (wid: string) =>
+    (entries ?? [])
       .filter((e) => e.wid === wid && e.date < date && hasResult(e))
       .sort((a, b) => b.date.localeCompare(a.date))[0];
-    return prev ? `${fmtSets(prev.sets)} (${prev.date})` : undefined;
+  const previousOf = (wid: string) => {
+    const prev = lastRun(wid);
+    return prev ? `${fmtEntry(prev)} (${prev.date})` : undefined;
   };
 
   return (
@@ -82,6 +84,7 @@ export default function Today({
               entry={e}
               workout={byId.get(e.wid)}
               previous={previousOf(e.wid)}
+              prevParts={lastRun(e.wid)?.parts}
             />
           ))}
           <div className="flex gap-2">

@@ -1,4 +1,4 @@
-import type { Entry, Measure, SetRow, Workout } from "./types";
+import type { Entry, Measure, Part, SetRow, Workout } from "./types";
 import { fmtTime } from "./util";
 
 export const MEASURE_ORDER: Measure[] = ["rounds", "reps", "weight", "time"];
@@ -46,8 +46,14 @@ export function hasValue(s: SetRow): boolean {
   );
 }
 
+/** Un esercizio conta come "misurato" se ha un peso, o ripetizioni con il workout segnato come fatto
+ *  (le ripetizioni precompilate dal testo del WOD sono solo la prescrizione). */
+export function partMeasured(p: Part, e: Entry): boolean {
+  return p.weight !== undefined || (e.done && p.reps !== undefined);
+}
+
 export function hasResult(e: Entry): boolean {
-  return e.sets.some(hasValue);
+  return e.sets.some(hasValue) || (e.parts ?? []).some((p) => partMeasured(p, e));
 }
 
 export function fmtSet(s: SetRow): string {
@@ -66,33 +72,61 @@ export function fmtSets(sets: SetRow[]): string {
   return sets.filter(hasValue).map(fmtSet).join("  |  ");
 }
 
-export type Metric = "time" | "weight" | "rounds" | "volume";
+export function fmtPart(p: Part): string {
+  const bits: string[] = [];
+  if (p.reps !== undefined) bits.push(`${p.reps}`);
+  if (p.weight !== undefined) bits.push(bits.length ? `× ${p.weight} kg` : `${p.weight} kg`);
+  return bits.join(" ") || "—";
+}
+
+/** Riassunto di una voce: risultato complessivo + esercizi. */
+export function fmtEntry(e: Entry): string {
+  const parts = (e.parts ?? [])
+    .filter((p) => partMeasured(p, e))
+    .map((p) => `${p.name} ${fmtPart(p)}`);
+  return [fmtSets(e.sets), parts.join(", ")].filter(Boolean).join(" · ");
+}
+
+export type Metric = "time" | "weight" | "rounds" | "reps" | "volume";
 
 export const METRIC_LABEL: Record<Metric, string> = {
   time: "Tempo",
   weight: "Peso max (kg)",
   rounds: "Round",
-  volume: "Volume (kg)",
+  reps: "Ripetizioni",
+  volume: "Volume totale (kg)",
 };
 
-/** Valore di una voce per una metrica; undefined se non misurabile. */
-export function metricValue(e: Entry, m: Metric): number | undefined {
+export type Values = Partial<Record<Metric, number>>;
+
+const maxOf = (v: (number | undefined)[]) => {
+  const x = v.filter((n): n is number => n !== undefined);
+  return x.length ? Math.max(...x) : undefined;
+};
+
+/** Valori di un singolo esercizio. */
+export function partValues(p: Part): Values {
+  return {
+    weight: p.weight,
+    reps: p.reps,
+    volume: p.weight !== undefined && p.reps ? p.weight * p.reps : undefined,
+  };
+}
+
+/** Valori dell'intero workout (serie + esercizi). `reps` non è una metrica del WOD intero. */
+export function entryValues(e: Entry): Values {
   const s = e.sets.filter(hasValue);
-  if (m === "time") {
-    const v = s.map((x) => x.time).filter((x): x is number => x !== undefined);
-    return v.length ? Math.min(...v) : undefined;
-  }
-  if (m === "weight") {
-    const v = s.map((x) => x.weight).filter((x): x is number => x !== undefined);
-    return v.length ? Math.max(...v) : undefined;
-  }
-  if (m === "rounds") {
-    const v = s.map((x) => x.rounds).filter((x): x is number => x !== undefined);
-    return v.length ? Math.max(...v) : undefined;
-  }
-  const v = s.map((x) => (x.weight ?? 0) * (x.reps ?? 0));
-  const sum = v.reduce((a, b) => a + b, 0);
-  return sum > 0 ? sum : undefined;
+  const parts = (e.parts ?? []).filter((p) => partMeasured(p, e));
+  const times = s.map((x) => x.time).filter((x): x is number => x !== undefined);
+  const volume =
+    s.reduce((a, x) => a + (x.weight ?? 0) * (x.reps ?? 0), 0) +
+    parts.reduce((a, p) => a + (p.weight ?? 0) * (p.reps ?? 0), 0);
+  return {
+    time: times.length ? Math.min(...times) : undefined,
+    rounds: maxOf(s.map((x) => x.rounds)),
+    weight: maxOf([...s.map((x) => x.weight), ...parts.map((p) => p.weight)]),
+    volume: volume > 0 ? volume : undefined,
+  };
 }
 
 /** true se per la metrica "meglio" significa valore più basso. */
@@ -101,5 +135,16 @@ export const lowerIsBetter = (m: Metric) => m === "time";
 export function fmtMetric(m: Metric, v: number): string {
   if (m === "time") return fmtTime(v);
   if (m === "weight" || m === "volume") return `${Math.round(v * 10) / 10} kg`;
-  return String(v);
+  return String(Math.round(v * 10) / 10);
+}
+
+/** Differenza tra due valori e se è un miglioramento. */
+export function change(
+  prev: number | undefined,
+  cur: number | undefined,
+  m: Metric,
+): { diff: number; better: boolean } | undefined {
+  if (prev === undefined || cur === undefined || prev === cur) return undefined;
+  const diff = cur - prev;
+  return { diff, better: lowerIsBetter(m) ? diff < 0 : diff > 0 };
 }

@@ -34,6 +34,14 @@ export interface SetRow {
   time?: number;
 }
 
+/** Un esercizio dentro il WOD (es. "Thruster": 21 ripetizioni, 43 kg). */
+export interface Part {
+  id: string;
+  name: string;
+  reps?: number;
+  weight?: number; // kg
+}
+
 /** Un workout pianificato in un giorno, con i risultati registrati. */
 export interface Entry {
   id: string;
@@ -42,7 +50,8 @@ export interface Entry {
   pos: number;
   level: Level;
   measures: Measure[];
-  sets: SetRow[];
+  sets: SetRow[]; // risultato complessivo (tempo, round) o serie di forza
+  parts?: Part[]; // esercizi del WOD con ripetizioni e peso
   note: string;
   done: boolean;
 }
@@ -51,6 +60,7 @@ export interface TemplateItem {
   wid: string;
   level: Level;
   measures: Measure[];
+  parts?: { name: string; reps?: number }[];
 }
 
 /** Modello riutilizzabile: giorni (0 = lunedì) con i workout da fare. */

@@ -1,6 +1,7 @@
 import { db, putDoc, removeDoc } from "./db";
 import { defaultMeasures } from "./measures";
 import type { Entry, Level, Template, Workout } from "./types";
+import { partsFromPrevious, suggestParts } from "./parts";
 import { addDaysIso, mondayIso, uid, weekdayIdx } from "./util";
 
 async function nextPos(date: string): Promise<number> {
@@ -9,6 +10,19 @@ async function nextPos(date: string): Promise<number> {
     .filter((d) => !d.deleted && (d.data as Entry).date === date)
     .map((d) => (d.data as Entry).pos);
   return pos.length ? Math.max(...pos) + 1 : 0;
+}
+
+/** Esercizi iniziali: gli stessi dell'ultima volta, altrimenti ricavati dal testo. */
+async function initialParts(w: Workout): Promise<Entry["parts"]> {
+  const all = (await db.docs.where("kind").equals("entry").toArray())
+    .filter((d) => !d.deleted && (d.data as Entry).wid === w.id)
+    .map((d) => d.data as Entry)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  for (const prev of all) {
+    const p = partsFromPrevious(prev);
+    if (p) return p;
+  }
+  return suggestParts(w);
 }
 
 export async function addEntry(date: string, w: Workout, level: Level = "rx") {
@@ -20,6 +34,7 @@ export async function addEntry(date: string, w: Workout, level: Level = "rx") {
     level,
     measures: defaultMeasures(w),
     sets: [{}],
+    parts: await initialParts(w),
     note: "",
     done: false,
   };
@@ -40,6 +55,7 @@ export async function duplicateDay(entries: Entry[], to: string) {
       date: to,
       pos: pos++,
       sets: [{}],
+      parts: e.parts?.map((p) => ({ id: uid(), name: p.name, reps: p.reps })),
       note: "",
       done: false,
     };
@@ -70,7 +86,12 @@ export function templateFromWeek(
     const items = allEntries
       .filter((e) => e.date === addDaysIso(monday, i))
       .sort((a, b) => a.pos - b.pos)
-      .map((e) => ({ wid: e.wid, level: e.level, measures: e.measures }));
+      .map((e) => ({
+        wid: e.wid,
+        level: e.level,
+        measures: e.measures,
+        parts: e.parts?.map((p) => ({ name: p.name, reps: p.reps })),
+      }));
     if (items.length) days.push({ offset: i, items });
   }
   return { id: uid(), name, days };
@@ -90,6 +111,7 @@ export async function applyTemplate(t: Template, anyDateInWeek: string) {
         level: it.level,
         measures: it.measures,
         sets: [{}],
+        parts: it.parts?.map((p) => ({ id: uid(), name: p.name, reps: p.reps })),
         note: "",
         done: false,
       };
